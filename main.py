@@ -8,6 +8,7 @@ class ExtractedInfo(BaseModel):
         moed: str = Field(description="The moed of the test")
         degree: str = Field(description="The degree")
 
+
 load_dotenv()
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 ORIGIN_PATH = os.environ.get("ORIGIN_PATH")
@@ -51,7 +52,6 @@ def pdf_suffix_adding(ORIGIN_PATH, GOAL_PATH):
         return new_path
     return path
 
-# Text extraction with fitz
 def extract_text_with_fitz(pdf_path, num_lines):
     """Extracts text from a PDF file using fitz."""
 
@@ -61,7 +61,6 @@ def extract_text_with_fitz(pdf_path, num_lines):
             if doc.page_count > 0:
                 first_page = doc[0]
                 text = first_page.get_text()
-                # fix_rtl_smart(text)
                 if num_lines:
                     return "".join(text.strip().splitlines()[:num_lines])  # Fixed .lines typo
                 return text
@@ -70,26 +69,6 @@ def extract_text_with_fitz(pdf_path, num_lines):
         print(f"Error opening PDF with fitz: {e}")
         return ""
 
-def is_line_reversed(line):
-    """Checks if a line is RTL (read right to left)."""
-
-    return bool(re.search(r"[\u0590-\u05FF]", line))
-
-# def fix_rtl_smart(text):
-#     """Fixes RTL text with LTR characters."""
-
-#     lines = text.strip().splitlines()  
-#     fixed_lines = []
-    
-#     for line in lines:
-#         if is_line_reversed(line):
-#             fixed_lines.append(line[::-1])
-#         else:
-#             fixed_lines.append(line) 
-    
-#     return "\n".join(fixed_lines)
-    
-# Text extraction with Tesseract
 def extract_text_with_tesseract(pdf_path, num_lines):
     """Extracts text from a PDF file using Tesseract OCR and PIL."""
 
@@ -107,7 +86,7 @@ def extract_text_with_tesseract(pdf_path, num_lines):
             img = enhancer.enhance(1.2)
             img = img.convert('L')
             text = pytesseract.image_to_string(img, lang='heb')
-            # text = fix_rtl_smart(text)
+            
             full_text += text + "\n"
             if num_lines:
                 lines = full_text.strip().splitlines()
@@ -118,7 +97,6 @@ def extract_text_with_tesseract(pdf_path, num_lines):
         print(f"Error implementing OCR with pytesseract: {e}")
         return full_text
 
-# Extract text from PDF
 def extract_text_from_pdf(pdf_path, num_lines = 100):
     """Extracts text from a PDF file using fitz and Tesseract OCR."""
 
@@ -195,9 +173,15 @@ def file_classifier(ORIGIN_PATH, GOAL_PATH):
         time.sleep(2.5)
         if is_test(f):
             course_name, year, semester, moed,degree = field_ai_analysis(curr_path)
-
             course_name = check_course_name(course_name,degree,JSON_PATH)
 
+            """Checking if the course name already exists using thefuzz, checking only directories"""
+            temp_path = goal / degree
+            files_arr = [file.name for file in temp_path.iterdir()]
+            match,score = process.extractOne(course_name, files_arr,score_cutoff=85)
+            if score >= 85:
+                course_name = match
+         
             """Moving the file to the goal path"""
             if course_name and year: 
                 new_name = f"{year} סמסטר {semester} מועד {moed}.pdf"
