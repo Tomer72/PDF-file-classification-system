@@ -62,7 +62,7 @@ def extract_text_with_fitz(pdf_path, num_lines):
                 first_page = doc[0]
                 text = first_page.get_text()
                 if num_lines:
-                    return "".join(text.strip().splitlines()[:num_lines])  # Fixed .lines typo
+                    return "".join(text.strip().splitlines()[:num_lines])  
                 return text
             return ""
     except Exception as e:
@@ -97,7 +97,7 @@ def extract_text_with_tesseract(pdf_path, num_lines):
         print(f"Error implementing OCR with pytesseract: {e}")
         return full_text
 
-def extract_text_from_pdf(pdf_path, num_lines = 100):
+def extract_text_from_pdf(pdf_path, num_lines):
     """Extracts text from a PDF file using fitz and Tesseract OCR."""
 
     text = extract_text_with_fitz(pdf_path, num_lines)
@@ -113,29 +113,47 @@ def extract_text_from_pdf(pdf_path, num_lines = 100):
 def is_test(pdf_path):
     """Checks if the PDF file is actually a test."""
 
-    text = extract_text_from_pdf(pdf_path, num_lines=50)
-    is_exam = "מבחן" in text or "מבחנים" in text or "מועד" in text or "מבחן" in pdf_path.name
-    return is_exam
+    text = extract_text_from_pdf(pdf_path, num_lines=60)
+    keywords = ["מבחן", "מבחנים", "בחינה", "מועד", "סמסטר", "שנה", "תשע", "תשפ","נבחנים"]
+    matches = [keywords for keyword in keywords if keyword in text]
+    return len(matches) >= 2
 
 def is_test_folder(folder_name: str):
     """Checks if the folder name contains the word 'מבחן' or 'בוחן'."""
 
     return bool(re.search(r"(מבח[ןנ]|בוח[ןנ])", folder_name))
 
-def check_course_name(course_name,degree,JSON_PATH):
-    """Checking if the course name is valid."""
+def normalize_course_name(name: str) -> str:
+    """Normalizes course name by removing special characters and extra spaces."""
+    
+    name = re.sub(r'[^\w\s]', '', name)
+    name = ' '.join(name.split())
+    return name
+
+def check_course_name(course_name, degree, JSON_PATH):
+    """Checking if the course name is valid and matches existing courses."""
+
     path = Path(JSON_PATH) / "courses.json"
 
     with open(path) as f:
         data = json.load(f)
     
     course_names = data[str(degree)]
-    match_result = process.extractOne(course_name, course_names,score_cutoff=85)
+    
+    # Normalize the input course name
+    normalized_input = normalize_course_name(course_name)
+    print(f"Original course name: {course_name}")
+    print(f"Normalized course name: {normalized_input}")
+    
+    # Try to find a match with a lower threshold
+    match_result = process.extractOne(normalized_input, course_names, score_cutoff=70)
     
     if match_result:
-        best_match_name = match_result[0]
+        best_match_name, score = match_result
+        print(f"Found match: {best_match_name} with score: {score}")
         return best_match_name
     else:
+        print(f"No match found for: {course_name}")
         return course_name
 
 
@@ -145,58 +163,94 @@ def file_classifier(ORIGIN_PATH, GOAL_PATH):
     source = Path(ORIGIN_PATH)
     goal = Path(GOAL_PATH)
 
-    print(f"Scanning directory: {source}")
+    print(f"Starting scan of directory: {source}")
+    print(f"Files will be moved to: {goal}")
 
     for f in source.rglob("*"):
-
+        print(f"\nProcessing: {f}")
         curr_path = f
 
         if not f.is_file() or f.name == ".DS_Store":
-            print(f"Skipping: {f}\n")
-            continue
-
-        """Checking if the current file is in a test folder or not"""
-        test_named_folder = is_test_folder(f.parent.name)
-        not_a_test_folder = not any([is_test_folder(part) for part in f.parts])
-        if not (test_named_folder or not_a_test_folder):
-            print(f"Skipping: {f}\n")
+            print(f"Skipping: {f} (not a file or .DS_Store)")
             continue
         
-        """Checking if the current file is a PDF file and adding the .pdf suffix"""
+        # Check if the file is in the root, course folder, or test folder
+        is_in_root = f.parent == source
+        is_in_course_folder = f.parent.parent == source
+        is_inside_test_folder = any(is_test_folder(part) for part in f.parts)
+
+        if not (is_in_root or is_in_course_folder or is_inside_test_folder):
+            print(f"Skipping: {f} (not in a course or test folder)")
+            continue
+
+        
+        # Checking if the current file is a PDF file and adding the .pdf suffix
+        print(f"Checking if file is PDF: {f}")
         updated_file = pdf_suffix_adding(f, GOAL_PATH)
         if not updated_file:
             print(f"Skipped non-PDF or moved: {f}")
             continue
         f = updated_file
 
-        """Extracting fields from the PDF file"""
-        time.sleep(2.5)
-        if is_test(f):
-            course_name, year, semester, moed,degree = field_ai_analysis(curr_path)
-            course_name = check_course_name(course_name,degree,JSON_PATH)
+        # Extracting fields from the PDF file
+        print(f"Extracting text from PDF: {f}")
+        time.sleep(1.5)
 
-            """Checking if the course name already exists using thefuzz, checking only directories"""
-            temp_path = goal / degree
-            files_arr = [file.name for file in temp_path.iterdir()]
-            match,score = process.extractOne(course_name, files_arr,score_cutoff=85)
-            if score >= 85:
-                course_name = match
+        
+        if is_test(f):
+            print(f"File identified as test: {f}")
+
+            course_name, year, semester, moed, degree = field_ai_analysis(curr_path)
+
+            print(f"Extracted info - Course: {course_name}, Year: {year}, Semester: {semester}, Moed: {moed}, Degree: {degree}")
+            
+            course_name = check_course_name(course_name, degree, JSON_PATH)
+            print(f"Checked course name: {course_name}")
+
+            # Checking if the year is valid
+            try:
+                year_int = int(year)
+                if year_int < 2000 or year_int > 2025:
+                    print(f"Invalid year: {year}")
+                    year = "unknown"
+            except ValueError:
+                print(f"Failed to parse year as int: {year}")
+                year = "unknown"
          
-            """Moving the file to the goal path"""
-            if course_name and year: 
-                new_name = f"{year} סמסטר {semester} מועד {moed}.pdf"
-                new_dir = goal / degree / course_name / "מבחנים" / year
-                new_dir.mkdir(parents=True, exist_ok=True)
-                new_path = new_dir / new_name
-                f.replace(new_path)
-                print(f"Moved test: {f} -> {new_path}\n")
-            else:
-                not_a_test = source / "not_a_test"
+            # Moving the file to the goal path
+            if course_name == "unknown" or year == "unknown" or semester == "unknown" or moed == "unknown" or degree == "unknown":
+                not_a_test = goal / "not_a_test"
                 not_a_test.mkdir(parents=True, exist_ok=True)
                 f.replace(not_a_test / f.name)
-                print(f"Moved to not_a_test: {f}\n")
+                print(f"Moved to not_a_test: {f} (missing course name or year)")
+                continue
+            
+            # Checking if the course name already exists using thefuzz, checking only directories
+            
+            temp_path = goal / degree
+            temp_path.mkdir(parents=True, exist_ok=True)  # Create the degree directory if it doesn't exist
+            files_arr = [file.name for file in temp_path.iterdir()]
+                
+            if files_arr:
+                result = process.extractOne(course_name, files_arr, score_cutoff=85) # Only try to match if there are existing directories
+                if result:
+                    match, score = result
+                    if score >= 85:
+                        course_name = match
+                        print(f"Matched existing course name: {course_name}")
+                else:
+                    print(f"No existing directories to match against for degree: {degree}")
+
+            
+            new_name = f"{year} סמסטר {semester} מועד {moed}.pdf"
+            new_dir = goal / degree / course_name / "מבחנים" / year
+            new_dir.mkdir(parents=True, exist_ok=True)
+            new_path = new_dir / new_name
+            f.replace(new_path)
+            print(f"Successfully moved test: {f} -> {new_path}")
+
         else:
-            print(f"The file {f} is not a test, skipping. \n")
+            print(f"File not identified as test: {f}")
             continue
 
 def text_ai_analysis(text: str):
@@ -232,6 +286,8 @@ def text_ai_analysis(text: str):
               the semster should be only "א"|"ב"|"ג"|"קיץ".
             While finding semster, make sure you extract the closests word or letter that comes right after the text "סמסטר" or "סמ׳".
 
+            If a field is not found clearly in the text, set its value to "unknown".
+
             """} ],
             temperature = 0.0,
             max_tokens = 300
@@ -242,7 +298,7 @@ def text_ai_analysis(text: str):
 def field_ai_analysis(pdf_path: Path):
     """Returning the extracted info."""
 
-    text = extract_text_from_pdf(pdf_path)
+    text = extract_text_from_pdf(pdf_path,60)
     extracted_info = text_ai_analysis(text)
     print(text)
     clean_response = re.sub(r"^```json\\s*|\\s*```$", "", extracted_info.strip(), flags=re.DOTALL)
@@ -259,7 +315,7 @@ def field_ai_analysis(pdf_path: Path):
         )
     except Exception as e:
         print(f"Failed to parse: {e}")
-        return "", "", "", "", "", ""
+        return "", "", "", "", ""
 
 if __name__ == "__main__":
     file_classifier(ORIGIN_PATH, GOAL_PATH)
